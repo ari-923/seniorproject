@@ -5,8 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Flooring Takeoff (MVP + Auto Dimension Reader)</title>
 
-  <!-- PDF.js -->
+  <!-- PDF.js (ONLY needed if you want PDF uploads) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
+  <script>
+    // If you keep PDF.js, set its worker path (fixes PDF worker issues on GitHub Pages)
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
+    }
+  </script>
 
   <!-- Tesseract.js (OCR in browser) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -56,10 +63,7 @@
     }
 
     canvas { display:block; }
-    #baseCanvas, #overlayCanvas {
-      position:absolute; left:0; top:0;
-      transform-origin: 0 0;
-    }
+    #baseCanvas, #overlayCanvas { position:absolute; left:0; top:0; transform-origin: 0 0; }
 
     .status { display:flex; gap:10px; flex-wrap:wrap; margin-top: 10px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
@@ -124,14 +128,14 @@
 
         <div class="notice hint" style="margin-top:10px">
           <b>Workflow:</b>
-          1) Upload blueprint → 2) Click <b>Detect dimensions</b> → 3) Click a detected dimension (list or box)
-          → 4) Mode auto-switches to <b>Set Scale</b> → click the two endpoints of that dimension line → scale sets automatically.
+          1) Upload → 2) <b>Detect dimensions</b> → 3) Click a detected number (list or orange box)
+          → 4) Mode auto-switches to <b>Set Scale</b> → click two endpoints of that dimension line → scale sets automatically.
           <br/>Then Mode: <b>Trace Area</b> → click corners → Finish area.
-          <br/><span class="hint">Tip: hold <b>Shift</b> while dragging to pan in any mode.</span>
+          <br/><span class="hint">Tip: hold <b>Shift</b> to pan/drag in any mode.</span>
         </div>
 
         <div class="hint" style="margin-top:10px">
-          OCR works best on clean, high-resolution PDFs/images. If it misses text, try a higher-res plan export or a PDF (not a screenshot).
+          OCR works best on clean, high-res PDFs/images. For screenshots, results can vary.
         </div>
 
         <div style="height:12px"></div>
@@ -164,7 +168,7 @@
 
         <div style="height:14px"></div>
         <div class="big">Detected Dimensions</div>
-        <div class="hint">Click one to set the auto-scale target. Then click its endpoints on the plan (Mode: Set Scale).</div>
+        <div class="hint">Click one to set the auto-scale target, then click its endpoints on the plan.</div>
         <div class="list" id="dimsList"></div>
 
         <div style="height:14px"></div>
@@ -455,7 +459,13 @@
 
     clearAllData();
 
-    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")){
+    const isPdf = (file.type === "application/pdf") || file.name.toLowerCase().endsWith(".pdf");
+
+    if (isPdf) {
+      if (!window.pdfjsLib) {
+        alert("PDF upload needs PDF.js, but it's not loaded.");
+        return;
+      }
       await loadPdfFirstPage(file);
     } else {
       await loadImageFile(file);
@@ -515,7 +525,7 @@
     const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
     const page = await pdf.getPage(1);
 
-    // Higher scale = better OCR (but heavier)
+    // Higher scale => better OCR (but heavier)
     const viewport = page.getViewport({ scale: 3.0 });
 
     const off = document.createElement("canvas");
@@ -592,11 +602,11 @@
     const imgPt = screenToImage(pt);
     if (imgPt.x < 0 || imgPt.y < 0 || imgPt.x > state.imgWidth || imgPt.y > state.imgHeight) return;
 
-    // If click on a detection bbox, select it (any mode)
+    // Click detection bbox => select it
     const clickedDim = findClickedDim(imgPt);
     if (clickedDim){
       selectDim(clickedDim.id);
-      // Continue (user can still place points)
+      // continue (user can still place points)
     }
 
     if (state.mode === "calibrate"){
@@ -646,7 +656,6 @@
     const zoomFactor = (e.deltaY < 0) ? 1.10 : 0.90;
     const newScale = clamp(state.scale * zoomFactor, state.minScale, state.maxScale);
 
-    // zoom around cursor
     const before = screenToImage(mouse);
     state.scale = newScale;
     const after = screenToImage(mouse);
@@ -663,7 +672,7 @@
   }
 
   // ---------------------------
-  // Calibration (auto if selectedDimFeet)
+  // Calibration
   // ---------------------------
   function finishCalibration(){
     if (state.calibratePts.length !== 2) return;
@@ -680,7 +689,7 @@
       return;
     }
 
-    // Fallback manual
+    // fallback manual
     const input = prompt("Enter the REAL distance between those two points (in FEET). Example: 12.5");
     if (input == null) return;
 
@@ -714,11 +723,7 @@
     const px2 = polygonAreaPx2(state.currentPts);
     const ft2 = px2 * (state.ftPerPixel * state.ftPerPixel);
 
-    state.areas.push({
-      name,
-      pts: structuredClone(state.currentPts),
-      areaSqft: ft2
-    });
+    state.areas.push({ name, pts: structuredClone(state.currentPts), areaSqft: ft2 });
 
     state.currentPts = [];
     updateReadouts();
@@ -781,8 +786,32 @@
   sqftPerBoxEl.addEventListener("input", recalcSummary);
 
   // ---------------------------
-  // OCR Dimension Detection (FIXED: supports "16 x 12")
+  // OCR: Stable Worker (GitHub Pages friendly)
   // ---------------------------
+  let ocrWorker = null;
+
+  async function getOcrWorker() {
+    if (ocrWorker) return ocrWorker;
+
+    ocrWorker = await Tesseract.createWorker("eng", 1, {
+      logger: (m) => {
+        if (m && m.status) {
+          const pct = (typeof m.progress === "number") ? ` ${(m.progress * 100).toFixed(0)}%` : "";
+          setOcrStatus(`${m.status}${pct}`);
+        }
+      },
+      workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js",
+      corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core.wasm.js",
+      langPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/lang/"
+    });
+
+    await ocrWorker.setParameters({
+      tessedit_char_whitelist: "0123456789xX×'\"-.,ftFT "
+    });
+
+    return ocrWorker;
+  }
+
   btnDetect.addEventListener("click", async () => {
     if (!state._img || state.ocrBusy) return;
 
@@ -792,37 +821,26 @@
     setOcrStatus("starting");
 
     try {
-      // Draw to canvas for OCR
+      // Draw to canvas
       const ocrCanvas = document.createElement("canvas");
       ocrCanvas.width = state.imgWidth;
       ocrCanvas.height = state.imgHeight;
-      const ocrCtx = ocrCanvas.getContext("2d");
+      const ocrCtx = ocrCanvas.getContext("2d", { willReadFrequently: true });
       ocrCtx.drawImage(state._img, 0, 0);
 
-      // Light preprocessing: grayscale + contrast threshold (helps colored dimension text)
+      // Preprocess: grayscale + mild threshold (helps colored dimension text)
       const imgData = ocrCtx.getImageData(0, 0, ocrCanvas.width, ocrCanvas.height);
       const d = imgData.data;
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i+1], b = d[i+2];
         const gray = (r * 0.299 + g * 0.587 + b * 0.114);
-        const v = gray > 170 ? 255 : (gray < 80 ? 0 : gray);
+        const v = gray > 175 ? 255 : (gray < 85 ? 0 : gray);
         d[i] = d[i+1] = d[i+2] = v;
       }
       ocrCtx.putImageData(imgData, 0, 0);
 
-      const result = await Tesseract.recognize(
-        ocrCanvas,
-        "eng",
-        {
-          tessedit_char_whitelist: "0123456789xX×'\"-.,ftFT ",
-          logger: (m) => {
-            if (m && m.status) {
-              const pct = (typeof m.progress === "number") ? ` ${(m.progress * 100).toFixed(0)}%` : "";
-              setOcrStatus(`${m.status}${pct}`);
-            }
-          }
-        }
-      );
+      const worker = await getOcrWorker();
+      const result = await worker.recognize(ocrCanvas);
 
       const dims = extractDimensionsFromOcr(result.data);
       state.dims = dims.sort((a,b) => (b.conf||0) - (a.conf||0)).slice(0, 80);
@@ -835,9 +853,9 @@
       render();
       setOcrStatus(`done (${state.dims.length} found)`);
     } catch (err) {
-      console.error(err);
-      alert("OCR failed. Try a clearer PDF/image or a higher-res plan export.");
+      console.error("OCR error:", err);
       setOcrStatus("error");
+      alert("OCR failed: " + (err?.message || err));
     } finally {
       state.ocrBusy = false;
       btnDetect.disabled = !state._img;
@@ -851,7 +869,6 @@
 
     const words = data?.words || [];
 
-    // Normalize OCR chars: primes/quotes and multiplication sign
     const norm = (s) => String(s || "")
       .replace(/[’′]/g, "'")
       .replace(/[”″]/g, '"')
@@ -859,13 +876,13 @@
       .trim();
 
     const normBox = (bb) => ({
-      x0: bb.x0 ?? bb.left ?? bb.x ?? 0,
-      y0: bb.y0 ?? bb.top ?? bb.y ?? 0,
-      x1: bb.x1 ?? (bb.left + bb.width) ?? 0,
-      y1: bb.y1 ?? (bb.top + bb.height) ?? 0
+      x0: bb?.x0 ?? bb?.left ?? bb?.x ?? 0,
+      y0: bb?.y0 ?? bb?.top ?? bb?.y ?? 0,
+      x1: bb?.x1 ?? ((bb?.left ?? 0) + (bb?.width ?? 0)),
+      y1: bb?.y1 ?? ((bb?.top ?? 0) + (bb?.height ?? 0))
     });
 
-    // 1) Single dimensions like 16', 12'-6", OR bare numbers like 16
+    // 1) Single dims like 16', 12'-6", or even 16
     for (const w of words){
       const t = norm(w.text);
       const parsed = parseSingleDim(t);
@@ -883,7 +900,7 @@
       });
     }
 
-    // 2) Room size patterns: "16 x 12" often appears as 3 words: 16, x, 12
+    // 2) Room size like "16 x 12" (3 words: 16, x, 12)
     for (let i = 0; i < words.length - 2; i++){
       const a = norm(words[i].text);
       const mid = norm(words[i+1].text);
@@ -897,9 +914,9 @@
       const B = parseInt(b, 10);
       if (A < 2 || A > 500 || B < 2 || B > 500) continue;
 
-      const bb1 = normBox(words[i].bbox || words[i].boundingBox || {});
-      const bb2 = normBox(words[i+1].bbox || words[i+1].boundingBox || {});
-      const bb3 = normBox(words[i+2].bbox || words[i+2].boundingBox || {});
+      const bb1 = normBox(words[i].bbox || words[i].boundingBox);
+      const bb2 = normBox(words[i+1].bbox || words[i+1].boundingBox);
+      const bb3 = normBox(words[i+2].bbox || words[i+2].boundingBox);
 
       const bbox = {
         x0: Math.min(bb1.x0, bb2.x0, bb3.x0),
@@ -910,7 +927,7 @@
 
       const conf = Math.round(((words[i].confidence ?? 0) + (words[i+1].confidence ?? 0) + (words[i+2].confidence ?? 0)) / 3);
 
-      // Add both candidates so user can pick either for scaling
+      // Add both candidates for scaling
       out.push({ id: `d${idCounter++}`, raw: `${A}'`, feet: A, bbox, conf });
       out.push({ id: `d${idCounter++}`, raw: `${B}'`, feet: B, bbox, conf });
     }
@@ -922,7 +939,7 @@
     const t = String(text || "").trim();
     if (!t) return null;
 
-    // Accept formats like: 12'-6", 12' 6", 12'6"
+    // 12'-6" or 12' 6"
     let m = t.match(/^(\d{1,3})\s*'\s*(?:-|\s)?\s*(\d{1,2})\s*"?$/);
     if (m){
       const ft = parseInt(m[1],10);
@@ -933,7 +950,7 @@
       return { feet, raw: inch ? `${ft}'-${inch}"` : `${ft}'` };
     }
 
-    // Accept pure feet like "16'" or even "16"
+    // Pure feet like 16 or 16'
     m = t.match(/^(\d{1,3})\s*'?$/);
     if (m){
       const ft = parseInt(m[1],10);
@@ -1004,12 +1021,10 @@
     state.selectedDimId = d.id;
     state.selectedDimFeet = d.feet;
 
-    // Switch user to calibrate
     state.mode = "calibrate";
     modeSelect.value = "calibrate";
-
-    // Clear calibration points to avoid mixing
     state.calibratePts = [];
+
     updateReadouts();
     renderDimsList();
     render();
