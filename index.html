@@ -75,7 +75,6 @@
     .line:last-child { border-bottom:none; }
 
     .notice { padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
-    .notice b { color: #111827; }
   </style>
 </head>
 
@@ -87,7 +86,7 @@
     </header>
 
     <div class="grid">
-      <!-- LEFT: Viewer -->
+      <!-- LEFT -->
       <section class="card">
         <div class="row">
           <div class="col-6">
@@ -120,18 +119,19 @@
           <span class="pill">Auto-scale target: <span class="mono" id="dimTarget">none</span></span>
           <span class="pill">Scale: <span class="mono" id="scaleReadout">not set</span></span>
           <span class="pill">Current points: <span class="mono" id="pointsReadout">0</span></span>
+          <span class="pill">OCR: <span class="mono" id="ocrStatus">idle</span></span>
         </div>
 
         <div class="notice hint" style="margin-top:10px">
-          <b>New workflow (automatic reading):</b>
-          1) Upload blueprint → 2) Click <b>Detect dimensions</b> → 3) Click a detected dimension (on the plan or list)
-          → 4) Mode: <b>Set Scale</b> → click two endpoints of that dimension → scale sets automatically.
-          <br/><b>Then</b> Mode: Trace Area → click corners → Finish area.
+          <b>Workflow:</b>
+          1) Upload blueprint → 2) Click <b>Detect dimensions</b> → 3) Click a detected dimension (list or box)
+          → 4) Mode auto-switches to <b>Set Scale</b> → click the two endpoints of that dimension line → scale sets automatically.
+          <br/>Then Mode: <b>Trace Area</b> → click corners → Finish area.
+          <br/><span class="hint">Tip: hold <b>Shift</b> while dragging to pan in any mode.</span>
         </div>
 
         <div class="hint" style="margin-top:10px">
-          Tip: OCR works best on high-resolution, clean PDFs. Scanned/blurred images may miss text or misread numbers.
-          Always confirm by clicking the correct dimension.
+          OCR works best on clean, high-resolution PDFs/images. If it misses text, try a higher-res plan export or a PDF (not a screenshot).
         </div>
 
         <div style="height:12px"></div>
@@ -142,7 +142,7 @@
         </div>
       </section>
 
-      <!-- RIGHT: Summary + detections -->
+      <!-- RIGHT -->
       <aside class="card">
         <div class="row">
           <div class="col-6">
@@ -164,7 +164,7 @@
 
         <div style="height:14px"></div>
         <div class="big">Detected Dimensions</div>
-        <div class="hint">Click one to set the auto-scale target (then click its endpoints on the plan).</div>
+        <div class="hint">Click one to set the auto-scale target. Then click its endpoints on the plan (Mode: Set Scale).</div>
         <div class="list" id="dimsList"></div>
 
         <div style="height:14px"></div>
@@ -198,20 +198,20 @@
     lastDrag: null,
 
     // calibration
-    calibratePts: [],          // two points in image coords
-    ftPerPixel: null,          // computed scale
-    selectedDimFeet: null,     // chosen detected dimension in feet
-    selectedDimId: null,       // selected detection id
+    calibratePts: [],
+    ftPerPixel: null,
+    selectedDimFeet: null,
+    selectedDimId: null,
 
     // tracing
-    currentPts: [],            // polygon points in image coords
-    areas: [],                 // {name, pts, areaSqft}
+    currentPts: [],
+    areas: [],
 
-    // detections (OCR)
-    dims: [],                  // {id, raw, feet, bbox:{x0,y0,x1,y1}, conf}
+    // OCR detections
+    dims: [], // {id, raw, feet, bbox:{x0,y0,x1,y1}, conf}
     ocrBusy: false,
 
-    // underlying image
+    // image
     _img: null
   };
 
@@ -238,6 +238,7 @@
   const dimTarget = document.getElementById("dimTarget");
   const scaleReadout = document.getElementById("scaleReadout");
   const pointsReadout = document.getElementById("pointsReadout");
+  const ocrStatus = document.getElementById("ocrStatus");
 
   const wastePctEl = document.getElementById("wastePct");
   const sqftPerBoxEl = document.getElementById("sqftPerBox");
@@ -256,7 +257,6 @@
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
   function dist(a,b){ return Math.hypot(a.x - b.x, a.y - b.y); }
 
-  // Shoelace formula area in pixel^2
   function polygonAreaPx2(pts){
     if (pts.length < 3) return 0;
     let sum = 0;
@@ -267,12 +267,10 @@
     return Math.abs(sum) / 2;
   }
 
-  // Convert screen coords → image coords
   function screenToImage(pt){
     return { x: (pt.x - state.offsetX) / state.scale, y: (pt.y - state.offsetY) / state.scale };
   }
 
-  // Convert image coords → screen coords
   function imageToScreen(pt){
     return { x: pt.x * state.scale + state.offsetX, y: pt.y * state.scale + state.offsetY };
   }
@@ -287,6 +285,10 @@
     dimTarget.textContent = state.selectedDimFeet ? `${state.selectedDimFeet.toFixed(3)} ft` : "none";
     scaleReadout.textContent = state.ftPerPixel ? `${state.ftPerPixel.toFixed(6)} ft/px` : "not set";
     pointsReadout.textContent = String(state.mode === "calibrate" ? state.calibratePts.length : state.currentPts.length);
+  }
+
+  function setOcrStatus(text){
+    ocrStatus.textContent = text;
   }
 
   // ---------------------------
@@ -324,7 +326,7 @@
   }
 
   // ---------------------------
-  // Render overlay (areas + detections + current action)
+  // Rendering
   // ---------------------------
   function render(){
     const rect = viewer.getBoundingClientRect();
@@ -339,12 +341,12 @@
       baseCtx.restore();
     }
 
-    // Draw existing areas
+    // Existing areas
     for (const a of state.areas){
       drawPolygon(a.pts, "rgba(59,130,246,0.95)", "rgba(59,130,246,0.18)", true);
     }
 
-    // Draw detections as boxes (clickable)
+    // Detections
     if (state.dims.length > 0){
       for (const d of state.dims){
         const isSel = d.id === state.selectedDimId;
@@ -445,7 +447,7 @@
   }
 
   // ---------------------------
-  // File Loading
+  // File loading
   // ---------------------------
   fileInput.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
@@ -459,7 +461,7 @@
       await loadImageFile(file);
     }
 
-    btnDetect.disabled = !state._img; // enable OCR button once image exists
+    btnDetect.disabled = !state._img;
     resizeCanvases();
     resetView();
     updateReadouts();
@@ -485,6 +487,7 @@
     state.ocrBusy = false;
     btnDetect.disabled = true;
 
+    setOcrStatus("idle");
     updateReadouts();
     renderDimsList();
     renderAreasList();
@@ -512,8 +515,8 @@
     const pdf = await pdfjsLib.getDocument({ data: arr }).promise;
     const page = await pdf.getPage(1);
 
-    // higher scale = better OCR (but heavier)
-    const viewport = page.getViewport({ scale: 2.5 });
+    // Higher scale = better OCR (but heavier)
+    const viewport = page.getViewport({ scale: 3.0 });
 
     const off = document.createElement("canvas");
     off.width = Math.floor(viewport.width);
@@ -533,7 +536,7 @@
   }
 
   // ---------------------------
-  // Modes & Buttons
+  // Modes & buttons
   // ---------------------------
   modeSelect.addEventListener("change", () => {
     state.mode = modeSelect.value;
@@ -543,7 +546,7 @@
     render();
   });
 
-  document.getElementById("btnResetView").addEventListener("click", resetView);
+  btnResetView.addEventListener("click", resetView);
 
   btnUndo.addEventListener("click", () => {
     if (state.mode === "calibrate") state.calibratePts.pop();
@@ -564,6 +567,13 @@
     if (state.mode === "trace") finishArea();
   });
 
+  viewer.addEventListener("dblclick", (e) => {
+    if (state.mode === "trace"){
+      e.preventDefault();
+      finishArea();
+    }
+  });
+
   // ---------------------------
   // Interaction: click points + pan/zoom
   // ---------------------------
@@ -573,7 +583,6 @@
 
     const pt = getViewerPoint(e);
 
-    // allow panning in pan mode, or shift+drag in other modes
     if (state.mode === "pan" || e.shiftKey){
       state.dragging = true;
       state.lastDrag = pt;
@@ -583,12 +592,11 @@
     const imgPt = screenToImage(pt);
     if (imgPt.x < 0 || imgPt.y < 0 || imgPt.x > state.imgWidth || imgPt.y > state.imgHeight) return;
 
-    // If user clicks on a detection box, select it (works in any mode)
+    // If click on a detection bbox, select it (any mode)
     const clickedDim = findClickedDim(imgPt);
     if (clickedDim){
       selectDim(clickedDim.id);
-      // keep going—user may still place a point in calibrate/trace
-      // but typically they select the dim then set scale.
+      // Continue (user can still place points)
     }
 
     if (state.mode === "calibrate"){
@@ -638,6 +646,7 @@
     const zoomFactor = (e.deltaY < 0) ? 1.10 : 0.90;
     const newScale = clamp(state.scale * zoomFactor, state.minScale, state.maxScale);
 
+    // zoom around cursor
     const before = screenToImage(mouse);
     state.scale = newScale;
     const after = screenToImage(mouse);
@@ -654,7 +663,7 @@
   }
 
   // ---------------------------
-  // Calibration
+  // Calibration (auto if selectedDimFeet)
   // ---------------------------
   function finishCalibration(){
     if (state.calibratePts.length !== 2) return;
@@ -662,20 +671,16 @@
     const px = dist(state.calibratePts[0], state.calibratePts[1]);
     if (px <= 0) return;
 
-    // If user selected an auto-read dimension, use it
     if (state.selectedDimFeet && state.selectedDimFeet > 0){
       state.ftPerPixel = state.selectedDimFeet / px;
-      updateReadouts();
-      render();
-      recalcSummary();
-      // reset calibration points for next time
       state.calibratePts = [];
       updateReadouts();
       render();
+      recalcSummary();
       return;
     }
 
-    // fallback manual prompt
+    // Fallback manual
     const input = prompt("Enter the REAL distance between those two points (in FEET). Example: 12.5");
     if (input == null) return;
 
@@ -686,16 +691,14 @@
     }
 
     state.ftPerPixel = feet / px;
-    updateReadouts();
-    render();
-    recalcSummary();
     state.calibratePts = [];
     updateReadouts();
     render();
+    recalcSummary();
   }
 
   // ---------------------------
-  // Trace Area
+  // Trace area
   // ---------------------------
   function finishArea(){
     if (!state.ftPerPixel){
@@ -709,7 +712,6 @@
 
     const name = areaName.value.trim() || `Area ${state.areas.length + 1}`;
     const px2 = polygonAreaPx2(state.currentPts);
-
     const ft2 = px2 * (state.ftPerPixel * state.ftPerPixel);
 
     state.areas.push({
@@ -779,7 +781,7 @@
   sqftPerBoxEl.addEventListener("input", recalcSummary);
 
   // ---------------------------
-  // OCR Dimension Detection
+  // OCR Dimension Detection (FIXED: supports "16 x 12")
   // ---------------------------
   btnDetect.addEventListener("click", async () => {
     if (!state._img || state.ocrBusy) return;
@@ -787,36 +789,55 @@
     state.ocrBusy = true;
     btnDetect.disabled = true;
     btnDetect.textContent = "Detecting… (OCR)";
+    setOcrStatus("starting");
 
     try {
-      // Run OCR on the underlying image (natural resolution)
+      // Draw to canvas for OCR
       const ocrCanvas = document.createElement("canvas");
       ocrCanvas.width = state.imgWidth;
       ocrCanvas.height = state.imgHeight;
       const ocrCtx = ocrCanvas.getContext("2d");
       ocrCtx.drawImage(state._img, 0, 0);
 
-      const { data } = await Tesseract.recognize(
+      // Light preprocessing: grayscale + contrast threshold (helps colored dimension text)
+      const imgData = ocrCtx.getImageData(0, 0, ocrCanvas.width, ocrCanvas.height);
+      const d = imgData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i+1], b = d[i+2];
+        const gray = (r * 0.299 + g * 0.587 + b * 0.114);
+        const v = gray > 170 ? 255 : (gray < 80 ? 0 : gray);
+        d[i] = d[i+1] = d[i+2] = v;
+      }
+      ocrCtx.putImageData(imgData, 0, 0);
+
+      const result = await Tesseract.recognize(
         ocrCanvas,
         "eng",
         {
-          // Helps OCR focus on dimension-like characters
-          tessedit_char_whitelist: "0123456789'\".-ftFT ,",
+          tessedit_char_whitelist: "0123456789xX×'\"-.,ftFT ",
+          logger: (m) => {
+            if (m && m.status) {
+              const pct = (typeof m.progress === "number") ? ` ${(m.progress * 100).toFixed(0)}%` : "";
+              setOcrStatus(`${m.status}${pct}`);
+            }
+          }
         }
       );
 
-      const dims = extractDimensionsFromOcr(data);
-      state.dims = dims.sort((a,b) => (b.conf||0) - (a.conf||0)).slice(0, 60); // keep top ~60
-      // auto-select the best one if nothing selected
-      if (state.dims.length && !state.selectedDimId){
+      const dims = extractDimensionsFromOcr(result.data);
+      state.dims = dims.sort((a,b) => (b.conf||0) - (a.conf||0)).slice(0, 80);
+
+      if (state.dims.length && !state.selectedDimId) {
         selectDim(state.dims[0].id);
       }
 
       renderDimsList();
       render();
+      setOcrStatus(`done (${state.dims.length} found)`);
     } catch (err) {
       console.error(err);
-      alert("OCR failed. Try a clearer PDF/image or zoomed blueprint export.");
+      alert("OCR failed. Try a clearer PDF/image or a higher-res plan export.");
+      setOcrStatus("error");
     } finally {
       state.ocrBusy = false;
       btnDetect.disabled = !state._img;
@@ -825,46 +846,102 @@
   });
 
   function extractDimensionsFromOcr(data){
-    // Tesseract v5 gives data.lines / data.words with bbox
-    // We'll use lines for more context, then parse dimension patterns from line.text.
     const out = [];
     let idCounter = 1;
 
-    const lines = data?.lines || [];
-    for (const line of lines){
-      const txt = (line.text || "").trim();
-      if (!txt) continue;
+    const words = data?.words || [];
 
-      const parsed = parseDimensionFromText(txt);
+    // Normalize OCR chars: primes/quotes and multiplication sign
+    const norm = (s) => String(s || "")
+      .replace(/[’′]/g, "'")
+      .replace(/[”″]/g, '"')
+      .replace(/[×]/g, "x")
+      .trim();
+
+    const normBox = (bb) => ({
+      x0: bb.x0 ?? bb.left ?? bb.x ?? 0,
+      y0: bb.y0 ?? bb.top ?? bb.y ?? 0,
+      x1: bb.x1 ?? (bb.left + bb.width) ?? 0,
+      y1: bb.y1 ?? (bb.top + bb.height) ?? 0
+    });
+
+    // 1) Single dimensions like 16', 12'-6", OR bare numbers like 16
+    for (const w of words){
+      const t = norm(w.text);
+      const parsed = parseSingleDim(t);
       if (!parsed) continue;
 
-      // Bounding box in image pixel coords
-      const bb = line.bbox || line.boundingBox || null;
+      const bb = w.bbox || w.boundingBox;
       if (!bb) continue;
 
-      // Normalize bbox format
-      const bbox = {
-        x0: bb.x0 ?? bb.left ?? bb.x ?? 0,
-        y0: bb.y0 ?? bb.top ?? bb.y ?? 0,
-        x1: bb.x1 ?? (bb.left + bb.width) ?? 0,
-        y1: bb.y1 ?? (bb.top + bb.height) ?? 0
-      };
-
-      // Basic confidence filter (line.confidence exists sometimes; else words average)
-      const conf = (typeof line.confidence === "number") ? line.confidence : (data.confidence || 0);
-
-      // Store
       out.push({
         id: `d${idCounter++}`,
         raw: parsed.raw,
         feet: parsed.feet,
-        bbox,
-        conf
+        bbox: normBox(bb),
+        conf: w.confidence ?? data.confidence ?? 0
       });
     }
 
-    // De-dupe by feet value + nearby bbox (rough)
+    // 2) Room size patterns: "16 x 12" often appears as 3 words: 16, x, 12
+    for (let i = 0; i < words.length - 2; i++){
+      const a = norm(words[i].text);
+      const mid = norm(words[i+1].text);
+      const b = norm(words[i+2].text);
+
+      if (!/^\d{1,3}$/.test(a)) continue;
+      if (!/^(x|X)$/i.test(mid)) continue;
+      if (!/^\d{1,3}$/.test(b)) continue;
+
+      const A = parseInt(a, 10);
+      const B = parseInt(b, 10);
+      if (A < 2 || A > 500 || B < 2 || B > 500) continue;
+
+      const bb1 = normBox(words[i].bbox || words[i].boundingBox || {});
+      const bb2 = normBox(words[i+1].bbox || words[i+1].boundingBox || {});
+      const bb3 = normBox(words[i+2].bbox || words[i+2].boundingBox || {});
+
+      const bbox = {
+        x0: Math.min(bb1.x0, bb2.x0, bb3.x0),
+        y0: Math.min(bb1.y0, bb2.y0, bb3.y0),
+        x1: Math.max(bb1.x1, bb2.x1, bb3.x1),
+        y1: Math.max(bb1.y1, bb2.y1, bb3.y1)
+      };
+
+      const conf = Math.round(((words[i].confidence ?? 0) + (words[i+1].confidence ?? 0) + (words[i+2].confidence ?? 0)) / 3);
+
+      // Add both candidates so user can pick either for scaling
+      out.push({ id: `d${idCounter++}`, raw: `${A}'`, feet: A, bbox, conf });
+      out.push({ id: `d${idCounter++}`, raw: `${B}'`, feet: B, bbox, conf });
+    }
+
     return dedupeDims(out);
+  }
+
+  function parseSingleDim(text){
+    const t = String(text || "").trim();
+    if (!t) return null;
+
+    // Accept formats like: 12'-6", 12' 6", 12'6"
+    let m = t.match(/^(\d{1,3})\s*'\s*(?:-|\s)?\s*(\d{1,2})\s*"?$/);
+    if (m){
+      const ft = parseInt(m[1],10);
+      const inch = m[2] ? parseInt(m[2],10) : 0;
+      if (!Number.isFinite(ft) || ft < 2 || ft > 500) return null;
+      if (!Number.isFinite(inch) || inch < 0 || inch >= 12) return null;
+      const feet = ft + inch/12;
+      return { feet, raw: inch ? `${ft}'-${inch}"` : `${ft}'` };
+    }
+
+    // Accept pure feet like "16'" or even "16"
+    m = t.match(/^(\d{1,3})\s*'?$/);
+    if (m){
+      const ft = parseInt(m[1],10);
+      if (!Number.isFinite(ft) || ft < 2 || ft > 500) return null;
+      return { feet: ft, raw: `${ft}'` };
+    }
+
+    return null;
   }
 
   function dedupeDims(dims){
@@ -880,6 +957,7 @@
   }
 
   function overlapRatio(a,b){
+    if (!a || !b) return 0;
     const xA = Math.max(a.x0, b.x0);
     const yA = Math.max(a.y0, b.y0);
     const xB = Math.min(a.x1, b.x1);
@@ -889,34 +967,6 @@
     const areaB = Math.max(0, b.x1-b.x0) * Math.max(0, b.y1-b.y0);
     const denom = Math.min(areaA, areaB) || 1;
     return inter / denom;
-  }
-
-  // Parse dimension formats like:
-  // 16'-0", 16' 0", 16'0", 16', 12'-6", 12' 6"
-  function parseDimensionFromText(text){
-    const t = text.replace(/[’′]/g, "'").replace(/[”″]/g, '"');
-
-    // Try common feet-inches pattern
-    // group1 = feet, group2 = inches (optional)
-    const re = /(\d{1,3})\s*'\s*(?:-|\s)?\s*(\d{1,2})?\s*"?/;
-    const m = t.match(re);
-    if (!m) return null;
-
-    const feet = parseInt(m[1], 10);
-    if (!Number.isFinite(feet)) return null;
-
-    const inches = m[2] ? parseInt(m[2], 10) : 0;
-    if (m[2] && (!Number.isFinite(inches) || inches >= 12)) {
-      // if OCR gave 99 inches etc, reject
-      return null;
-    }
-
-    const totalFeet = feet + (inches / 12);
-    // sanity filter (avoid tiny numbers like 1' that are often text noise)
-    if (totalFeet < 2 || totalFeet > 500) return null;
-
-    const raw = inches ? `${feet}'-${inches}"` : `${feet}'`;
-    return { feet: totalFeet, raw };
   }
 
   function renderDimsList(){
@@ -935,8 +985,7 @@
               <div class="hint mono">${d.feet.toFixed(3)} ft • conf ${Math.round(d.conf || 0)}</div>
             </div>
             <div class="itemBtns">
-              <button type="button" class="${selected ? "" : "secondary"}"
-                onclick="selectDim('${d.id}')">
+              <button type="button" class="${selected ? "" : "secondary"}" onclick="selectDim('${d.id}')">
                 ${selected ? "Selected" : "Use for scale"}
               </button>
             </div>
@@ -946,28 +995,26 @@
     }).join("");
   }
 
-  window.selectDim = function(id){
-    selectDim(id);
-  };
+  window.selectDim = function(id){ selectDim(id); };
 
   function selectDim(id){
     const d = state.dims.find(x => x.id === id);
     if (!d) return;
+
     state.selectedDimId = d.id;
     state.selectedDimFeet = d.feet;
 
-    // Switch to calibrate to guide user
+    // Switch user to calibrate
     state.mode = "calibrate";
     modeSelect.value = "calibrate";
 
-    // Clear calibration points for clean start
+    // Clear calibration points to avoid mixing
     state.calibratePts = [];
     updateReadouts();
     renderDimsList();
     render();
   }
 
-  // Clicking on a bbox selects it
   function findClickedDim(imgPt){
     for (const d of state.dims){
       const b = d.bbox;
@@ -1007,6 +1054,7 @@
   window.addEventListener("resize", resizeCanvases);
   resizeCanvases();
   updateReadouts();
+  setOcrStatus("idle");
   renderDimsList();
   renderAreasList();
   recalcSummary();
