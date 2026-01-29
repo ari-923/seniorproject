@@ -3,32 +3,16 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
 const statusEl = document.getElementById("status");
-const scaleOut = document.getElementById("scaleOut");
-const ptsOut = document.getElementById("ptsOut");
 const areaOut = document.getElementById("areaOut");
-
-const btnSetScale = document.getElementById("btnSetScale");
-const btnDraw = document.getElementById("btnDraw");
-const btnFinish = document.getElementById("btnFinish");
-const btnClearPoly = document.getElementById("btnClearPoly");
-const btnResetAll = document.getElementById("btnResetAll");
-
-const realDistanceInput = document.getElementById("realDistance");
-const unitSelect = document.getElementById("unit");
 
 let img = new Image();
 let imgLoaded = false;
 
-// Modes: "none" | "scale" | "draw"
-let mode = "none";
-
-// Scale calibration
-let scaleClicks = []; // 2 points
-let unitsPerPixel = null; // selected unit per pixel
-
-// Polygon drawing
-let polyPoints = []; // array of {x,y} in canvas coords
-let finishedPolygons = []; // store multiple polygons if desired
+// Drag selection
+let isDragging = false;
+let dragStart = null; // {x,y}
+let dragEnd = null;   // {x,y}
+let savedRects = [];  // store multiple rectangles if you want
 
 function setStatus(msg) {
   statusEl.textContent = "Status: " + msg;
@@ -36,85 +20,6 @@ function setStatus(msg) {
 
 function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-}
-
-function draw() {
-  clearCanvas();
-  if (imgLoaded) {
-    // Fit image inside canvas while preserving aspect ratio
-    // We'll draw image starting at 0,0 with scale that fits.
-    // For simplicity, we assume the canvas is large enough; we fit exactly.
-    const fit = getFitRect(img.width, img.height, canvas.width, canvas.height);
-    ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
-
-    // Draw overlays in fitted coordinate system
-    // We'll convert all stored points from "canvas coords" directly
-    // (because user clicks are in canvas coords).
-  }
-
-  // Draw scale line points
-  if (scaleClicks.length > 0) {
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "red";
-    ctx.fillStyle = "red";
-    for (const p of scaleClicks) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    if (scaleClicks.length === 2) {
-      ctx.beginPath();
-      ctx.moveTo(scaleClicks[0].x, scaleClicks[0].y);
-      ctx.lineTo(scaleClicks[1].x, scaleClicks[1].y);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // Draw current polygon points
-  if (polyPoints.length > 0) {
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "blue";
-    ctx.fillStyle = "blue";
-
-    // points
-    for (const p of polyPoints) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // lines
-    ctx.beginPath();
-    ctx.moveTo(polyPoints[0].x, polyPoints[0].y);
-    for (let i = 1; i < polyPoints.length; i++) {
-      ctx.lineTo(polyPoints[i].x, polyPoints[i].y);
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // Draw finished polygons
-  if (finishedPolygons.length > 0) {
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "green";
-    for (const poly of finishedPolygons) {
-      if (poly.length < 3) continue;
-      ctx.beginPath();
-      ctx.moveTo(poly[0].x, poly[0].y);
-      for (let i = 1; i < poly.length; i++) {
-        ctx.lineTo(poly[i].x, poly[i].y);
-      }
-      ctx.closePath();
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  ptsOut.textContent = String(polyPoints.length);
 }
 
 function getFitRect(imgW, imgH, boxW, boxH) {
@@ -133,54 +38,48 @@ function getFitRect(imgW, imgH, boxW, boxH) {
   return { x, y, w, h };
 }
 
-function distance(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
+function draw() {
+  clearCanvas();
+
+  if (imgLoaded) {
+    const fit = getFitRect(img.width, img.height, canvas.width, canvas.height);
+    ctx.drawImage(img, fit.x, fit.y, fit.w, fit.h);
+  }
+
+  // Draw saved rectangles
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "green";
+  for (const r of savedRects) {
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+  }
+  ctx.restore();
+
+  // Draw current drag rectangle
+  if (dragStart && dragEnd) {
+    const r = rectFromPoints(dragStart, dragEnd);
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "blue";
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.restore();
+  }
 }
 
-// Shoelace formula for polygon area (in pixel^2)
-function polygonAreaPx2(points) {
-  let sum = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    sum += points[i].x * points[j].y - points[j].x * points[i].y;
-  }
-  return Math.abs(sum) / 2;
+function rectFromPoints(a, b) {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const w = Math.abs(a.x - b.x);
+  const h = Math.abs(a.y - b.y);
+  return { x, y, w, h };
 }
 
-function updateScaleUI() {
-  if (!unitsPerPixel) {
-    scaleOut.textContent = "Not set";
-    return;
-  }
-  scaleOut.textContent = `${unitsPerPixel.toFixed(6)} ${unitSelect.value}/px`;
-}
-
-function updateAreaUI() {
-  if (!unitsPerPixel) {
-    areaOut.textContent = "Set scale first";
-    return;
-  }
-  if (finishedPolygons.length === 0) {
-    areaOut.textContent = "Draw + finish a polygon";
-    return;
-  }
-
-  // sum areas of finished polygons
-  let totalUnits2 = 0;
-  for (const poly of finishedPolygons) {
-    if (poly.length < 3) continue;
-    const aPx2 = polygonAreaPx2(poly);
-    totalUnits2 += aPx2 * (unitsPerPixel ** 2);
-  }
-
-  // If unit is feet, show sqft. Otherwise show unit^2
-  const unit = unitSelect.value;
-  let label = `${unit}²`;
-  if (unit === "ft") label = "sq ft";
-
-  areaOut.textContent = `${totalUnits2.toFixed(2)} ${label}`;
+function canvasPointFromMouse(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  return { x, y };
 }
 
 fileInput.addEventListener("change", (e) => {
@@ -191,108 +90,72 @@ fileInput.addEventListener("change", (e) => {
   img = new Image();
   img.onload = () => {
     imgLoaded = true;
-    setStatus("Image loaded. Click 'Set Scale' to calibrate.");
-    resetOverlaysOnly();
+    savedRects = [];
+    dragStart = null;
+    dragEnd = null;
+    setStatus("Image loaded. Drag a rectangle over the flooring area.");
+    areaOut.textContent = "—";
     draw();
   };
   img.src = url;
 });
 
-function resetOverlaysOnly() {
-  mode = "none";
-  scaleClicks = [];
-  unitsPerPixel = null;
-  polyPoints = [];
-  finishedPolygons = [];
-  updateScaleUI();
-  updateAreaUI();
-}
-
-btnSetScale.addEventListener("click", () => {
-  if (!imgLoaded) return setStatus("Upload an image first.");
-  mode = "scale";
-  scaleClicks = [];
-  setStatus("Scale mode: Click TWO points that match the real distance you enter.");
-  draw();
-});
-
-btnDraw.addEventListener("click", () => {
-  if (!imgLoaded) return setStatus("Upload an image first.");
-  if (!unitsPerPixel) return setStatus("Set scale first (click Set Scale).");
-  mode = "draw";
-  setStatus("Draw mode: Click around the room perimeter. Then click 'Finish Polygon'.");
-  draw();
-});
-
-btnFinish.addEventListener("click", () => {
-  if (polyPoints.length < 3) return setStatus("Need at least 3 points to finish a polygon.");
-  finishedPolygons.push([...polyPoints]);
-  polyPoints = [];
-  setStatus("Polygon saved. Draw another area or view total area.");
-  draw();
-  updateAreaUI();
-});
-
-btnClearPoly.addEventListener("click", () => {
-  polyPoints = [];
-  setStatus("Cleared current polygon.");
-  draw();
-});
-
-btnResetAll.addEventListener("click", () => {
-  imgLoaded = false;
-  img = new Image();
-  fileInput.value = "";
-  resetOverlaysOnly();
-  clearCanvas();
-  setStatus("Reset complete. Upload an image to begin.");
-});
-
-canvas.addEventListener("click", (e) => {
+// Drag events
+canvas.addEventListener("mousedown", (e) => {
   if (!imgLoaded) return;
-
-  const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-  const p = { x, y };
-
-  if (mode === "scale") {
-    scaleClicks.push(p);
-    if (scaleClicks.length === 2) {
-      const pxDist = distance(scaleClicks[0], scaleClicks[1]);
-      const realDist = Number(realDistanceInput.value);
-      if (!realDist || realDist <= 0) {
-        setStatus("Enter a valid real distance.");
-        scaleClicks = [];
-        draw();
-        return;
-      }
-      unitsPerPixel = realDist / pxDist;
-      updateScaleUI();
-      setStatus("Scale set! Now click 'Draw Area' and trace the room.");
-      mode = "none";
-      updateAreaUI();
-    }
-    draw();
-  } else if (mode === "draw") {
-    polyPoints.push(p);
-    draw();
-  }
+  isDragging = true;
+  dragStart = canvasPointFromMouse(e);
+  dragEnd = dragStart;
+  setStatus("Dragging... release to finish.");
+  draw();
 });
 
-// If user changes units after scale is set, we should clear scale to avoid wrong conversions.
-unitSelect.addEventListener("change", () => {
-  // simplest safe behavior: force re-scale
-  if (unitsPerPixel) {
-    unitsPerPixel = null;
-    scaleClicks = [];
-    setStatus("Units changed — please set scale again.");
-    updateScaleUI();
-    updateAreaUI();
-    draw();
-  }
+canvas.addEventListener("mousemove", (e) => {
+  if (!isDragging) return;
+  dragEnd = canvasPointFromMouse(e);
+  draw();
 });
 
-realDistanceInput.addEventListener("input", () => {
-  // no auto-change; only used when setting scale
+canvas.addEventListener("mouseup", () => {
+  if (!isDragging) return;
+  isDragging = false;
+
+  if (!dragStart || !dragEnd) return;
+
+  const r = rectFromPoints(dragStart, dragEnd);
+
+  // Reject tiny rectangles
+  if (r.w < 10 || r.h < 10) {
+    setStatus("Rectangle too small. Drag a bigger area.");
+    dragStart = null;
+    dragEnd = null;
+    draw();
+    return;
+  }
+
+  // Ask user for real-world dimensions
+  const realW = prompt("Enter REAL width of this selected area (feet):", "10");
+  const realH = prompt("Enter REAL height of this selected area (feet):", "12");
+
+  const wNum = Number(realW);
+  const hNum = Number(realH);
+
+  if (!wNum || !hNum || wNum <= 0 || hNum <= 0) {
+    setStatus("Invalid dimensions. Selection not saved.");
+    dragStart = null;
+    dragEnd = null;
+    draw();
+    return;
+  }
+
+  const sqft = wNum * hNum;
+
+  savedRects.push(r);
+  areaOut.textContent = `${sqft.toFixed(2)} sq ft (last selection)`;
+  setStatus("Saved. Drag another rectangle to add more areas.");
+
+  // Clear current drag
+  dragStart = null;
+  dragEnd = null;
+  draw();
 });
