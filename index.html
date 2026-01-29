@@ -3,70 +3,67 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>AI Flooring Takeoff</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>Blueprint Flooring Estimator</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 16px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .panel { flex: 1; min-width: 320px; }
+    canvas { border: 1px solid #ccc; max-width: 100%; height: auto; cursor: crosshair; }
+    .controls button { margin: 6px 6px 6px 0; }
+    .status { margin-top: 10px; padding: 10px; background: #f7f7f7; border: 1px solid #ddd; }
+    .hint { color: #555; font-size: 0.95rem; }
+    input[type="number"] { width: 120px; }
+  </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>AI Flooring Takeoff</h1>
-      <p class="muted">Upload a blueprint → AI estimates flooring sqft → you review.</p>
-    </header>
+  <h1>Blueprint Flooring Estimator (Scale + Polygon)</h1>
+  <p class="hint">
+    Upload a blueprint (image). Then: <b>Set Scale</b> by clicking 2 points and entering the real distance.
+    Then: <b>Draw Area</b> by clicking around the room perimeter and press <b>Finish Polygon</b>.
+  </p>
 
-    <section class="card">
-      <div class="row">
-        <div>
-          <label>Upload blueprint (PNG/JPG/PDF)</label>
-          <input id="file" type="file" accept="image/*,.pdf" />
-          <p class="hint">Best results: clean, high-resolution PDF export (not a screenshot).</p>
-        </div>
-
-        <div>
-          <label>Waste %</label>
-          <input id="wastePct" type="number" value="10" step="0.1" />
-          <label style="margin-top:12px;">Sq ft per box (optional)</label>
-          <input id="sqftPerBox" type="number" placeholder="18.6" step="0.01" />
-        </div>
+  <div class="row">
+    <div class="panel">
+      <h3>1) Upload blueprint</h3>
+      <input id="fileInput" type="file" accept="image/*" />
+      <div class="controls">
+        <button id="btnSetScale">Set Scale</button>
+        <label>Real distance:
+          <input id="realDistance" type="number" min="0" step="0.01" value="10" />
+        </label>
+        <select id="unit">
+          <option value="ft" selected>feet</option>
+          <option value="in">inches</option>
+          <option value="m">meters</option>
+        </select>
       </div>
 
-      <div class="actions">
-        <button id="btnRun" disabled>Run AI Estimate</button>
-        <button id="btnClear" class="secondary" disabled>Clear</button>
+      <h3>2) Draw flooring area</h3>
+      <div class="controls">
+        <button id="btnDraw">Draw Area</button>
+        <button id="btnFinish">Finish Polygon</button>
+        <button id="btnClearPoly">Clear Polygon</button>
+        <button id="btnResetAll">Reset All</button>
       </div>
 
-      <div id="status" class="status muted">No file uploaded.</div>
-    </section>
-
-    <section class="grid">
-      <div class="card">
-        <h2>Preview</h2>
-        <div id="previewWrap" class="previewWrap">
-          <div class="muted">Upload a file to preview.</div>
-        </div>
+      <div class="status" id="status">
+        Status: Upload an image to begin.
       </div>
 
-      <div class="card">
-        <h2>Results</h2>
-        <div class="kpis">
-          <div class="kpi"><div class="muted">Subtotal (sq ft)</div><div id="kSubtotal" class="big">—</div></div>
-          <div class="kpi"><div class="muted">Waste (sq ft)</div><div id="kWaste" class="big">—</div></div>
-          <div class="kpi"><div class="muted">Total (sq ft)</div><div id="kTotal" class="big">—</div></div>
-          <div class="kpi"><div class="muted">Boxes</div><div id="kBoxes" class="big">—</div></div>
-        </div>
-
-        <h3>AI JSON</h3>
-        <pre id="jsonOut" class="code">—</pre>
-
-        <h3>Notes</h3>
-        <ul id="notes" class="notes"></ul>
-
-        <div class="warn">
-          <b>Important:</b> AI can be wrong on complex plans. Always verify scale + room selection.
-        </div>
+      <div class="status">
+        <div><b>Scale:</b> <span id="scaleOut">Not set</span></div>
+        <div><b>Polygon points:</b> <span id="ptsOut">0</span></div>
+        <div><b>Area:</b> <span id="areaOut">—</span></div>
       </div>
-    </section>
+    </div>
+
+    <div class="panel">
+      <h3>Canvas</h3>
+      <canvas id="canvas" width="900" height="650"></canvas>
+      <p class="hint">Tip: Use a blueprint screenshot/image export for best results.</p>
+    </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
