@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Use POST' });
   }
@@ -18,16 +17,6 @@ export default async function handler(req, res) {
     }
 
     const systemPrompt = `
-You are an assistant for a Blueprint Flooring Estimator web app.
-
-You ONLY help with:
-- total square footage
-- adding waste percentage (e.g. +10%)
-- estimating cost if price per sq ft is provided
-- explaining flooring math clearly
-
-Be concise, professional, and practical.
-If the question is unrelated, politely redirect to flooring topics.
 `.trim();
 
     const userPrompt = `
@@ -62,8 +51,6 @@ ${JSON.stringify(snapshot || {}, null, 2)}
     }
 
     const data = await openaiRes.json();
-
-    // ✅ SAFELY extract assistant text from Responses API
     let reply = 'No reply generated.';
 
     if (Array.isArray(data.output)) {
