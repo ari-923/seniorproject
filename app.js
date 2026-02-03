@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Blueprint Flooring Estimator (Rect / Circle / Triangle)
+ * Blueprint Flooring Estimator
  * - Upload PNG/JPG blueprint
  * - Draw shapes on canvas
  * - Enter REAL dimensions in feet + label
